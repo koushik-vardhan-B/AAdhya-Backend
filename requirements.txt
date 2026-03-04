@@ -1,0 +1,8 @@
+transformers 
+torch
+optimum[onnxruntime]
+datasets
+scikit-learn
+fastapi 
+uvicorn 
+pydantic
