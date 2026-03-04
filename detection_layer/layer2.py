@@ -258,7 +258,7 @@ def _classify_fraud_type(message: str) -> dict:
     }
 
 
-def run_layer2(message: str, layer1_result: dict = None) -> dict:
+def run_layer2(message: str, layer1_result: dict = None, language: str = None) -> dict:
     """
     Classify a flagged message into specific fraud type.
 
@@ -342,6 +342,9 @@ def run_layer2(message: str, layer1_result: dict = None) -> dict:
     risk_score = int(combined * 100)
     risk_level = "High Risk" if risk_score >= 65 else "Suspicious"
 
+    # --- Detect language ---
+    lang = language or _detect_language(message)
+
     # --- Generate explanation ---
     explanation = _generate_explanation(
         classification["fraud_type"],
@@ -349,7 +352,13 @@ def run_layer2(message: str, layer1_result: dict = None) -> dict:
         phishing_prob,
         risk_score,
         url_reasons,
+        language=lang,
     )
+
+    # Get language-specific prevention tips
+    fraud_type = classification["fraud_type"]
+    tips_data = PREVENTION_TIPS_I18N.get(lang, PREVENTION_TIPS_I18N["en"])
+    prevention_tips = tips_data.get(fraud_type, tips_data.get("Others", []))
 
     elapsed = round((time.time() - start_time) * 1000, 2)
 
@@ -361,6 +370,8 @@ def run_layer2(message: str, layer1_result: dict = None) -> dict:
         "risk_level": risk_level,
         "matched_keywords": classification["matched_keywords"],
         "explanation": explanation,
+        "prevention_tips": prevention_tips,
+        "detected_language": lang,
         "url_analysis": {
             "urls_found": urls,
             "url_risk_score": round(url_risk, 4),
@@ -370,10 +381,11 @@ def run_layer2(message: str, layer1_result: dict = None) -> dict:
     }
 
 
-def _generate_explanation(fraud_type: str, keywords: list, phishing_prob: float, risk_score: int, url_reasons: list = None) -> str:
-    """Generate a human-readable explanation of the detection."""
-
-    explanations = {
+# ---------------------------------------------------------------------------
+# Multi-language explanations
+# ---------------------------------------------------------------------------
+EXPLANATIONS = {
+    "en": {
         "UPI Fraud": (
             "This message appears to be a UPI/banking fraud attempt. "
             "It tries to trick you into sharing banking details, OTP, or making payments. "
@@ -398,19 +410,202 @@ def _generate_explanation(fraud_type: str, keywords: list, phishing_prob: float,
             "This message has been flagged as potentially fraudulent. "
             "Exercise caution and verify the sender's identity before responding."
         ),
-    }
+        "high_risk": "⚠️ HIGH RISK — Do NOT respond to this message.",
+        "caution": "⚠️ Exercise extreme caution with this message.",
+        "safe": "This message appears to be safe. No fraud indicators detected.",
+    },
+    "hi": {
+        "UPI Fraud": (
+            "यह संदेश UPI/बैंकिंग धोखाधड़ी का प्रयास लग रहा है। "
+            "यह आपको बैंकिंग विवरण, OTP, या भुगतान साझा करने के लिए धोखा देने की कोशिश कर रहा है। "
+            "असली बैंक कभी भी SMS से OTP, PIN, या CVV नहीं मांगते।"
+        ),
+        "Lottery Scam": (
+            "यह संदेश दावा करता है कि आपने लॉटरी या इनाम जीता है। "
+            "यह एक पुरानी धोखाधड़ी है — जो लॉटरी आपने खरीदी नहीं, वो आप जीत नहीं सकते। "
+            "कभी भी 'प्रोसेसिंग फीस' न दें और अपनी जानकारी साझा न करें।"
+        ),
+        "Job Scam": (
+            "यह संदेश एक संदिग्ध नौकरी या कमाई का अवसर बता रहा है। "
+            "असली कंपनियां कभी भी पहले रजिस्ट्रेशन फीस नहीं मांगतीं। "
+            "अवास्तविक सैलरी और 'घर बैठे कमाएं' के वादों से सावधान रहें।"
+        ),
+        "Phishing": (
+            "इस संदेश में संदिग्ध लिंक हैं या आपसे जानकारी सत्यापित करने को कहा गया है। "
+            "अनजान लिंक पर कभी क्लिक न करें। "
+            "हमेशा URL को ध्यान से जांचें।"
+        ),
+        "Others": (
+            "इस संदेश को संभावित धोखाधड़ी के रूप में चिन्हित किया गया है। "
+            "सावधानी बरतें और भेजने वाले की पहचान सत्यापित करें।"
+        ),
+        "high_risk": "⚠️ उच्च जोखिम — इस संदेश का जवाब न दें।",
+        "caution": "⚠️ इस संदेश से बहुत सावधान रहें।",
+        "safe": "यह संदेश सुरक्षित प्रतीत होता है। कोई धोखाधड़ी संकेत नहीं मिले।",
+    },
+    "te": {
+        "UPI Fraud": (
+            "ఈ సందేశం UPI/బ్యాంకింగ్ మోసం ప్రయత్నంగా కనిపిస్తోంది. "
+            "ఇది మీ బ్యాంకింగ్ వివరాలు, OTP, లేదా చెల్లింపులు చేయమని మిమ్మల్ని మోసగించడానికి ప్రయత్నిస్తోంది. "
+            "నిజమైన బ్యాంకులు ఎప్పుడూ SMS ద్వారా OTP, PIN, లేదా CVV అడగవు."
+        ),
+        "Lottery Scam": (
+            "ఈ సందేశం మీరు లాటరీ లేదా బహుమతి గెలిచారని చెప్తోంది. "
+            "ఇది సాధారణ మోసం — మీరు కొనని లాటరీ మీరు గెలవలేరు. "
+            "ఎప్పుడూ 'ప్రాసెసింగ్ ఫీజు' చెల్లించకండి లేదా వ్యక్తిగత వివరాలు పంచుకోకండి."
+        ),
+        "Job Scam": (
+            "ఈ సందేశం అనుమానాస్పద ఉద్యోగం లేదా ఆదాయ అవకాశాన్ని ప్రచారం చేస్తోంది. "
+            "నిజమైన ఉద్యోగాలు ముందుగా రిజిస్ట్రేషన్ ఫీజు అడగవు. "
+            "అసాధారణ జీతం వాగ్దానాలు మరియు 'ఇంట్లోనే సంపాదించండి' ఆఫర్ల పట్ల జాగ్రత్తగా ఉండండి."
+        ),
+        "Phishing": (
+            "ఈ సందేశంలో అనుమానాస్పద లింకులు ఉన్నాయి లేదా వ్యక్తిగత సమాచారం ధృవీకరించమని అడుగుతోంది. "
+            "తెలియని లింకులపై ఎప్పుడూ క్లిక్ చేయకండి. "
+            "క్లిక్ చేయడానికి ముందు URLలను జాగ్రత్తగా తనిఖీ చేయండి."
+        ),
+        "Others": (
+            "ఈ సందేశం మోసం కావచ్చని గుర్తించబడింది. "
+            "జాగ్రత్తగా ఉండండి మరియు పంపిన వారి గుర్తింపును ధృవీకరించండి."
+        ),
+        "high_risk": "⚠️ అధిక ప్రమాదం — ఈ సందేశానికి సమాధానం ఇవ్వకండి.",
+        "caution": "⚠️ ఈ సందేశం పట్ల చాలా జాగ్రత్తగా ఉండండి.",
+        "safe": "ఈ సందేశం సురక్షితంగా కనిపిస్తోంది. మోసం సంకేతాలు కనుగొనబడలేదు.",
+    },
+}
 
-    base = explanations.get(fraud_type, explanations["Others"])
+PREVENTION_TIPS_I18N = {
+    "en": {
+        "UPI Fraud": [
+            "Never share OTP, PIN, or CVV with anyone.",
+            "Banks never ask for UPI PIN via SMS or call.",
+            "Always verify the sender before making any payment.",
+            "Use official banking apps from Play Store/App Store.",
+            "Report suspicious UPI requests to your bank.",
+        ],
+        "Lottery Scam": [
+            "You cannot win a lottery you never entered.",
+            "Never pay 'processing fees' to claim a prize.",
+            "Delete messages claiming you've won from unknown sources.",
+            "Report such messages to cybercrime.gov.in.",
+        ],
+        "Job Scam": [
+            "Legitimate companies never charge registration fees.",
+            "Be wary of unrealistic salary promises.",
+            "Never pay money to get a job offer.",
+            "Report fake jobs to Cyber Crime helpline 1930.",
+        ],
+        "Phishing": [
+            "Never click on unknown or suspicious links.",
+            "Always verify URLs before entering credentials.",
+            "Look for HTTPS and correct domain spelling.",
+            "Enable two-factor authentication on all accounts.",
+        ],
+        "Others": [
+            "Be cautious with unsolicited messages.",
+            "Never share personal/financial info via SMS.",
+            "Report suspicious messages to helpline 1930.",
+        ],
+    },
+    "hi": {
+        "UPI Fraud": [
+            "कभी भी किसी के साथ OTP, PIN, या CVV साझा न करें।",
+            "बैंक कभी SMS या कॉल से UPI PIN नहीं मांगते।",
+            "भुगतान करने से पहले भेजने वाले की पुष्टि करें।",
+            "बैंकिंग ऐप्स Play Store/App Store से ही डाउनलोड करें।",
+            "संदिग्ध UPI अनुरोध बैंक को रिपोर्ट करें।",
+        ],
+        "Lottery Scam": [
+            "जो लॉटरी आपने खरीदी नहीं, वो आप जीत नहीं सकते।",
+            "इनाम पाने के लिए कभी 'प्रोसेसिंग फीस' न दें।",
+            "अनजान स्रोतों से आए ऐसे संदेश डिलीट करें।",
+            "ऐसे संदेश cybercrime.gov.in पर रिपोर्ट करें।",
+        ],
+        "Job Scam": [
+            "असली कंपनियां कभी रजिस्ट्रेशन फीस नहीं लेतीं।",
+            "अवास्तविक सैलरी के वादों से बचें।",
+            "नौकरी के लिए कभी पैसे न दें।",
+            "फेक जॉब की शिकायत 1930 पर करें।",
+        ],
+        "Phishing": [
+            "अनजान या संदिग्ध लिंक पर कभी क्लिक न करें।",
+            "कोई भी जानकारी भरने से पहले URL जांचें।",
+            "HTTPS और सही डोमेन नाम की जांच करें।",
+            "सभी अकाउंट पर टू-फैक्टर ऑथेंटिकेशन चालू करें।",
+        ],
+        "Others": [
+            "अनजान संदेशों से सावधान रहें।",
+            "SMS से कभी निजी/वित्तीय जानकारी साझा न करें।",
+            "संदिग्ध संदेश 1930 हेल्पलाइन पर रिपोर्ट करें।",
+        ],
+    },
+    "te": {
+        "UPI Fraud": [
+            "ఎవరికీ OTP, PIN, లేదా CVV చెప్పకండి.",
+            "బ్యాంకులు SMS లేదా కాల్ ద్వారా UPI PIN అడగవు.",
+            "చెల్లింపు చేయడానికి ముందు పంపిన వారిని ధృవీకరించండి.",
+            "బ్యాంకింగ్ యాప్‌లు Play Store/App Store నుండి మాత్రమే డౌన్‌లోడ్ చేయండి.",
+            "అనుమానాస్పద UPI రిక్వెస్ట్‌లను బ్యాంకుకు రిపోర్ట్ చేయండి.",
+        ],
+        "Lottery Scam": [
+            "మీరు కొనని లాటరీ మీరు గెలవలేరు.",
+            "బహుమతి పొందడానికి ఎప్పుడూ 'ప్రాసెసింగ్ ఫీజు' చెల్లించకండి.",
+            "తెలియని వారి నుండి వచ్చిన ఇలాంటి సందేశాలు డిలీట్ చేయండి.",
+            "ఇలాంటి సందేశాలను cybercrime.gov.in లో రిపోర్ట్ చేయండి.",
+        ],
+        "Job Scam": [
+            "నిజమైన కంపెనీలు రిజిస్ట్రేషన్ ఫీజు తీసుకోవు.",
+            "అసాధారణ జీతం వాగ్దానాలను నమ్మకండి.",
+            "ఉద్యోగం కోసం ఎప్పుడూ డబ్బు ఇవ్వకండి.",
+            "నకిలీ ఉద్యోగాలను 1930 హెల్ప్‌లైన్‌కు రిపోర్ట్ చేయండి.",
+        ],
+        "Phishing": [
+            "తెలియని లేదా అనుమానాస్పద లింకులపై ఎప్పుడూ క్లిక్ చేయకండి.",
+            "వివరాలు నమోదు చేయడానికి ముందు URLలను ధృవీకరించండి.",
+            "HTTPS మరియు సరైన డొమైన్ స్పెల్లింగ్ చెక్ చేయండి.",
+            "అన్ని ఖాతాలలో టూ-ఫ్యాక్టర్ ఆథెంటికేషన్ ఆన్ చేయండి.",
+        ],
+        "Others": [
+            "తెలియని సందేశాల పట్ల జాగ్రత్తగా ఉండండి.",
+            "SMS ద్వారా వ్యక్తిగత/ఆర్థిక సమాచారం పంచుకోకండి.",
+            "అనుమానాస్పద సందేశాలను 1930 హెల్ప్‌లైన్‌కు రిపోర్ట్ చేయండి.",
+        ],
+    },
+}
+
+
+def _detect_language(text: str) -> str:
+    """Detect language from text using Unicode script ranges."""
+    telugu_count = sum(1 for ch in text if "\u0C00" <= ch <= "\u0C7F")
+    hindi_count = sum(1 for ch in text if "\u0900" <= ch <= "\u097F")
+    total = len(text)
+
+    if total == 0:
+        return "en"
+    if telugu_count / total > 0.1:
+        return "te"
+    if hindi_count / total > 0.1:
+        return "hi"
+    return "en"
+
+
+def _generate_explanation(fraud_type: str, keywords: list, phishing_prob: float, risk_score: int, url_reasons: list = None, language: str = "en") -> str:
+    """Generate a human-readable explanation in the detected language."""
+    lang = language if language in EXPLANATIONS else "en"
+    lang_data = EXPLANATIONS[lang]
+
+    base = lang_data.get(fraud_type, lang_data["Others"])
 
     if keywords:
-        base += f" Suspicious keywords detected: {', '.join(keywords[:5])}."
+        base += f" Suspicious keywords: {', '.join(keywords[:5])}."
 
     if url_reasons:
         base += f" URL risks: {'; '.join(url_reasons[:3])}."
 
     if risk_score >= 80:
-        base += " ⚠️ HIGH RISK — Do NOT respond to this message."
+        base += f" {lang_data['high_risk']}"
     elif risk_score >= 60:
-        base += " ⚠️ Exercise extreme caution with this message."
+        base += f" {lang_data['caution']}"
 
     return base
+
