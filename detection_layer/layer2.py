@@ -4,7 +4,12 @@ Uses ealvaradob/bert-finetuned-phishing for phishing detection +
 keyword-based classification for Indian-specific fraud types.
 
 This layer ONLY runs on messages flagged by Layer 1 (spam/suspicious).
-It answers: "What KIND of fraud is this?"
+
+Improvements:
+    - URL Risk Detector (analyzes actual URL structure)
+    - Calibrated scoring (smooth, realistic confidence)
+    - Hinglish pattern support
+    - Response time tracking
 
 Output fraud types:
     - UPI Fraud
@@ -16,7 +21,9 @@ Output fraud types:
 
 import os
 import re
+import time
 import torch
+from urllib.parse import urlparse
 from transformers import BertTokenizer, BertForSequenceClassification
 
 # ---------------------------------------------------------------------------
@@ -33,8 +40,107 @@ model = BertForSequenceClassification.from_pretrained(_MODEL_PATH).to(device)
 model.eval()
 
 # ---------------------------------------------------------------------------
+# URL Risk Detector
+# ---------------------------------------------------------------------------
+# Suspicious TLDs often used in phishing
+SUSPICIOUS_TLDS = {
+    ".xyz", ".top", ".buzz", ".club", ".info", ".tk", ".ml", ".ga",
+    ".cf", ".gq", ".work", ".click", ".link", ".online", ".site",
+    ".icu", ".pw", ".cc", ".ws", ".bid", ".stream", ".racing",
+}
+
+# Known legitimate domains (whitelist)
+SAFE_DOMAINS = {
+    "google.com", "facebook.com", "amazon.in", "flipkart.com", "paytm.com",
+    "phonepe.com", "sbi.co.in", "hdfcbank.com", "icicibank.com",
+    "axisbank.com", "rbi.org.in", "npci.org.in", "gov.in", "nic.in",
+}
+
+# Brand names attackers commonly mimic
+SPOOFED_BRANDS = [
+    "sbi", "hdfc", "icici", "axis", "pnb", "kotak", "canara",
+    "paytm", "phonepe", "gpay", "google", "amazon", "flipkart",
+    "whatsapp", "telegram", "facebook", "instagram", "gov", "aadhaar",
+]
+
+
+def _analyze_url(url_str: str) -> dict:
+    """
+    Analyze a URL for phishing signals.
+
+    Returns:
+        dict with:
+            - is_suspicious: bool
+            - risk_score: float 0.0 – 1.0
+            - reasons: list of human-readable reasons
+    """
+    reasons = []
+    score = 0.0
+
+    try:
+        parsed = urlparse(url_str if "://" in url_str else f"http://{url_str}")
+        domain = parsed.netloc.lower()
+        full_url = url_str.lower()
+
+        # 1. Short URL services → always suspicious in SMS
+        short_domains = {"bit.ly", "tinyurl.com", "t.co", "goo.gl", "short.link", "rb.gy", "is.gd"}
+        if any(s in domain for s in short_domains):
+            score += 0.50
+            reasons.append("Shortened URL (hides real destination)")
+
+        # 2. Suspicious TLD
+        for tld in SUSPICIOUS_TLDS:
+            if domain.endswith(tld):
+                score += 0.35
+                reasons.append(f"Suspicious TLD: {tld}")
+                break
+
+        # 3. IP address instead of domain
+        if re.match(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", domain):
+            score += 0.60
+            reasons.append("IP address used instead of domain name")
+
+        # 4. Brand spoofing (e.g., sbi-update.in, hdfc-verify.com)
+        for brand in SPOOFED_BRANDS:
+            if brand in domain and domain not in SAFE_DOMAINS:
+                score += 0.45
+                reasons.append(f"Possible brand impersonation: '{brand}' in URL")
+                break
+
+        # 5. Excessive hyphens (common in phishing: sbi-account-update-verify.com)
+        if domain.count("-") >= 2:
+            score += 0.25
+            reasons.append("Multiple hyphens in domain (common phishing tactic)")
+
+        # 6. Long subdomain chains (secure.login.verify.sbi-fake.xyz)
+        if domain.count(".") >= 3:
+            score += 0.20
+            reasons.append("Multiple subdomains (suspicious domain structure)")
+
+        # 7. HTTP without HTTPS
+        if url_str.startswith("http://"):
+            score += 0.15
+            reasons.append("No HTTPS (insecure connection)")
+
+    except Exception:
+        score += 0.30
+        reasons.append("Malformed URL")
+
+    return {
+        "is_suspicious": score > 0.25,
+        "risk_score": min(score, 1.0),
+        "reasons": reasons,
+    }
+
+
+def _extract_urls(message: str) -> list:
+    """Extract all URLs from a message."""
+    url_pattern = r"https?://\S+|(?:bit\.ly|tinyurl\.com|t\.co|goo\.gl)/\S+"
+    return re.findall(url_pattern, message, re.IGNORECASE)
+
+
+# ---------------------------------------------------------------------------
 # Fraud type keyword patterns (more granular than Layer 1)
-# These determine the SPECIFIC type of fraud
 # ---------------------------------------------------------------------------
 FRAUD_TYPE_PATTERNS = {
     "UPI Fraud": {
@@ -49,6 +155,9 @@ FRAUD_TYPE_PATTERNS = {
             r"(otp|pin|cvv|password)\s*(share|send|enter|verify)",
             r"(kyc|know\s*your\s*customer)\s*(update|verify|expire|pending)",
             r"(card|debit\s*card|credit\s*card).*(block|expire|suspend)",
+            # Hinglish
+            r"(paisa|paise|rupay)\s*(bhej|de|wapas)",
+            r"(khata|account)\s*(band|block|freeze)",
         ],
     },
     "Lottery Scam": {
@@ -61,6 +170,9 @@ FRAUD_TYPE_PATTERNS = {
             r"(₹|rs\.?)\s*\d+.*(lakh|crore|thousand|million)",
             r"(lucky|selected|chosen)\s*(customer|number|winner|user)",
             r"(bumper|jackpot|grand)\s*(prize|offer|win)",
+            # Hinglish
+            r"(jeet|jeeta|jeete).*(inam|prize|lakh|crore)",
+            r"badhai\s*ho.*(jeet|prize|inam)",
         ],
     },
     "Job Scam": {
@@ -76,6 +188,9 @@ FRAUD_TYPE_PATTERNS = {
             r"(whatsapp|telegram|contact).*\d{10}",
             r"(vacancy|hiring|recruit).*(urgent|immediate)",
             r"(daily\s*payment|weekly\s*payment|instant\s*payment)",
+            # Hinglish
+            r"(ghar\s*baithe|ghar\s*se)\s*(kama|paise)",
+            r"(naukri|kaam)\s*(chahiye|milegi|dilayenge)",
         ],
     },
     "Phishing": {
@@ -90,22 +205,16 @@ FRAUD_TYPE_PATTERNS = {
             r"(suspend|restrict|limit|disable).*(account|access|service)",
             r"(security|suspicious)\s*(alert|activity|login|access)",
             r"(reset|change)\s*(password|pin|credential)",
+            # Hinglish
+            r"(yahan|neeche)\s*(click|tap|dabaye)",
+            r"(link|url)\s*(khole|kholo|open)",
         ],
     },
 }
 
 
 def _classify_fraud_type(message: str) -> dict:
-    """
-    Classify the specific fraud type using keyword pattern matching.
-
-    Returns:
-        dict with:
-            - fraud_type: str (UPI Fraud, Lottery Scam, Job Scam, Phishing, Others)
-            - type_confidence: float 0.0–1.0
-            - matched_keywords: list of matched keyword strings
-            - all_scores: dict of scores per fraud type (for transparency)
-    """
+    """Classify the specific fraud type using keyword pattern matching."""
     text = message.lower()
     scores = {}
     all_matched = {}
@@ -117,12 +226,10 @@ def _classify_fraud_type(message: str) -> dict:
             if match:
                 matched.append(match.group())
 
-        # Score = number of matched patterns / total patterns in group
-        # More matches = higher confidence in this fraud type
         total_patterns = len(pattern_group["keywords"])
         score = len(matched) / total_patterns if total_patterns > 0 else 0
 
-        # Boost if multiple keywords match (strong signal)
+        # Boost if multiple keywords match
         if len(matched) >= 3:
             score = min(score * 1.3, 1.0)
         if len(matched) >= 2:
@@ -158,21 +265,12 @@ def run_layer2(message: str, layer1_result: dict = None) -> dict:
     Combines:
         - BERT phishing model confidence
         - Keyword-based fraud type classification
+        - URL risk analysis
 
-    Args:
-        message: The raw SMS/text message (already flagged by Layer 1).
-        layer1_result: Optional dict from Layer 1 for context.
-
-    Returns:
-        dict with keys:
-            - fraud_type: "UPI Fraud" | "Lottery Scam" | "Job Scam" | "Phishing" | "Others"
-            - phishing_confidence: float 0.0–1.0 (BERT model score)
-            - type_confidence: float 0.0–1.0 (keyword classification score)
-            - risk_score: int 0–100 (final combined score)
-            - risk_level: "Suspicious" or "High Risk"
-            - matched_keywords: list of keywords that matched
-            - explanation: str (human-readable reason)
+    Returns dict with fraud_type, risk_score, explanation, url_analysis, etc.
     """
+    start_time = time.time()
+
     if not message or not message.strip():
         return {
             "fraud_type": "Others",
@@ -182,43 +280,66 @@ def run_layer2(message: str, layer1_result: dict = None) -> dict:
             "risk_level": "Safe",
             "matched_keywords": [],
             "explanation": "Empty message received.",
+            "url_analysis": None,
+            "processing_time_ms": 0.0,
         }
+
+    message = message.strip()[:2000]
 
     # --- BERT phishing model inference ---
     inputs = tokenizer(
         message,
         return_tensors="pt",
-        padding="max_length",
+        padding=True,
         truncation=True,
-        max_length=512,
+        max_length=256,
     ).to(device)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         outputs = model(**inputs)
         probs = torch.softmax(outputs.logits, dim=-1)
-        phishing_prob = probs[0][1].item()  # Class 1 = phishing
+        phishing_prob = probs[0][1].item()
+
+    # --- URL risk analysis ---
+    urls = _extract_urls(message)
+    url_results = [_analyze_url(u) for u in urls]
+    url_risk = max((r["risk_score"] for r in url_results), default=0.0)
+    url_reasons = []
+    for r in url_results:
+        url_reasons.extend(r["reasons"])
 
     # --- Keyword-based fraud type classification ---
     classification = _classify_fraud_type(message)
 
-    # --- Combine scores ---
-    # If BERT says phishing with high confidence AND keywords match phishing,
-    # boost the phishing type score
+    # --- Combine scores with calibration ---
+    # If BERT says phishing with high confidence AND keywords match phishing, boost
     if phishing_prob > 0.7 and classification["fraud_type"] == "Phishing":
         classification["type_confidence"] = max(classification["type_confidence"], 0.85)
 
-    # If BERT says phishing but keywords say something more specific
-    # (like UPI Fraud), trust the keywords for the TYPE but use BERT
-    # confidence for the overall risk
-    combined_risk = max(phishing_prob, classification["type_confidence"])
+    # Factor in URL risk — if URLs are suspicious, boost risk
+    if url_risk > 0.3:
+        phishing_boost = url_risk * 0.4
+        classification["type_confidence"] = max(classification["type_confidence"], phishing_boost)
 
-    # Factor in Layer 1 confidence if available
+    # Calibrated combination of all signals
+    signals = [phishing_prob, classification["type_confidence"], url_risk]
+    max_signal = max(signals)
+
     if layer1_result and "risk_score" in layer1_result:
         l1_score = layer1_result["risk_score"] / 100
-        combined_risk = (0.3 * l1_score) + (0.3 * phishing_prob) + (0.4 * classification["type_confidence"])
-        combined_risk = max(combined_risk, 0.45)  # Already flagged, minimum suspicious
+        # Weighted: L1 context + BERT + keywords + URL
+        combined = (0.20 * l1_score) + (0.25 * phishing_prob) + (0.35 * classification["type_confidence"]) + (0.20 * url_risk)
+        # Don't let combined score be lower than the strongest signal
+        combined = max(combined, max_signal * 0.75)
+        combined = max(combined, 0.45)  # Already flagged, minimum suspicious
+    else:
+        combined = max_signal
 
-    risk_score = int(combined_risk * 100)
+    # Smooth variance to avoid identical scores
+    variance = (phishing_prob * 0.08) + (url_risk * 0.05)
+    combined = min(combined + variance * (1 - combined), 1.0)
+
+    risk_score = int(combined * 100)
     risk_level = "High Risk" if risk_score >= 65 else "Suspicious"
 
     # --- Generate explanation ---
@@ -227,7 +348,10 @@ def run_layer2(message: str, layer1_result: dict = None) -> dict:
         classification["matched_keywords"],
         phishing_prob,
         risk_score,
+        url_reasons,
     )
+
+    elapsed = round((time.time() - start_time) * 1000, 2)
 
     return {
         "fraud_type": classification["fraud_type"],
@@ -237,10 +361,16 @@ def run_layer2(message: str, layer1_result: dict = None) -> dict:
         "risk_level": risk_level,
         "matched_keywords": classification["matched_keywords"],
         "explanation": explanation,
+        "url_analysis": {
+            "urls_found": urls,
+            "url_risk_score": round(url_risk, 4),
+            "url_warnings": url_reasons,
+        } if urls else None,
+        "processing_time_ms": elapsed,
     }
 
 
-def _generate_explanation(fraud_type: str, keywords: list, phishing_prob: float, risk_score: int) -> str:
+def _generate_explanation(fraud_type: str, keywords: list, phishing_prob: float, risk_score: int, url_reasons: list = None) -> str:
     """Generate a human-readable explanation of the detection."""
 
     explanations = {
@@ -274,6 +404,9 @@ def _generate_explanation(fraud_type: str, keywords: list, phishing_prob: float,
 
     if keywords:
         base += f" Suspicious keywords detected: {', '.join(keywords[:5])}."
+
+    if url_reasons:
+        base += f" URL risks: {'; '.join(url_reasons[:3])}."
 
     if risk_score >= 80:
         base += " ⚠️ HIGH RISK — Do NOT respond to this message."

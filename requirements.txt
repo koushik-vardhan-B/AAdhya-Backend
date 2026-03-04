@@ -6,6 +6,8 @@ scikit-learn
 fastapi 
 uvicorn 
 pydantic
+easyocr
+python-multipart
 
 
 groq==0.9.0

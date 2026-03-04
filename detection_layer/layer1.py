@@ -2,11 +2,19 @@
 Layer 1 — Fast Binary Spam/Ham Pre-filter with Indian Keyword Booster
 Uses AventIQ-AI/distilBERT_spam_detection + keyword pattern matching
 to detect both Western and Indian-specific scams.
+
+Improvements:
+    - Calibrated confidence scores (smooth, realistic)
+    - Hinglish / Hindi keyword support
+    - Scam pattern memory (tracks pattern frequency)
+    - Better input validation
 """
 
 import os
 import re
+import time
 import torch
+from collections import Counter
 from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
 
 # ---------------------------------------------------------------------------
@@ -23,7 +31,13 @@ model = DistilBertForSequenceClassification.from_pretrained(_MODEL_PATH).to(devi
 model.eval()
 
 # ---------------------------------------------------------------------------
-# Indian-specific scam keyword patterns
+# Scam Pattern Memory — tracks which patterns are hit most
+# ---------------------------------------------------------------------------
+pattern_memory = Counter()   # { "upi_fraud": 12, "phishing": 8, ... }
+scan_counter = {"total": 0, "spam": 0, "ham": 0}
+
+# ---------------------------------------------------------------------------
+# Indian-specific scam keyword patterns (English + Hinglish)
 # Each pattern group has a weight (how strongly it indicates a scam)
 # ---------------------------------------------------------------------------
 SCAM_PATTERNS = {
@@ -36,6 +50,10 @@ SCAM_PATTERNS = {
             r"(bank|sbi|hdfc|icici|axis).*(suspend|block|verify|update\s*kyc)",
             r"(account|a/c).*(block|suspend|close|verify)",
             r"send\s*(money|amount|rs|₹)",
+            # Hinglish
+            r"(paisa|paise|rupay)\s*(bhej|transfer|de)",
+            r"(khata|account)\s*(band|block|verify)",
+            r"apn[ae]\s*(bank|upi|account)\s*(verify|update)",
         ],
     },
     # Lottery / Prize scam
@@ -46,6 +64,10 @@ SCAM_PATTERNS = {
             r"(kbc|kaun\s*banega|lottery|lucky\s*draw)",
             r"claim\s*(now|your|prize|reward|amount)",
             r"(₹|rs\.?)\s*\d+.*(lakh|crore|thousand)",
+            # Hinglish
+            r"(jeet|jeeta|jeete|jeetiye).*(lakh|crore|inam|prize)",
+            r"(inam|inaam)\s*(milega|mila|le)",
+            r"badhai\s*ho",
         ],
     },
     # Job scam
@@ -57,6 +79,10 @@ SCAM_PATTERNS = {
             r"(registration|joining)\s*(fee|charge|amount)",
             r"(₹|rs\.?)\s*\d+.*per\s*(month|day|hour)",
             r"part\s*time.*income",
+            # Hinglish
+            r"(ghar\s*baithe|ghar\s*se)\s*(kama|kamai|paise)",
+            r"(naukri|job)\s*(chahiye|dilayenge|milegi)",
+            r"(kamai|kamao|kamaye)\s*(₹|rs|lakh|hazar)",
         ],
     },
     # Phishing / Link scam
@@ -68,6 +94,9 @@ SCAM_PATTERNS = {
             r"http[s]?://\S+",  # any URL in SMS is suspicious
             r"bit\.ly|tinyurl|short\.link",
             r"(pan|aadhaar|aadhar)\s*(card|number|link|illegal)",
+            # Hinglish
+            r"(yahan|idhar|neeche)\s*(click|tap|dabaye)",
+            r"(link|url)\s*(khole|kholo|open\s*karo)",
         ],
     },
     # Urgency / Pressure tactics
@@ -80,6 +109,9 @@ SCAM_PATTERNS = {
             r"(expire|expir|within)\s*\d+\s*(hour|minute|hr|min)",
             r"act\s*now",
             r"limited\s*(time|offer|period)",
+            # Hinglish
+            r"(jaldi|turant|abhi)\s*(karo|kare|karein)",
+            r"(aakhri|antim)\s*(mauka|chance|chetavni)",
         ],
     },
 }
@@ -92,6 +124,8 @@ SAFE_PATTERNS = [
     r"(appointment|meeting|schedule|reminder)\s*(at|on|for)",
     r"(happy\s*birthday|congratulations\s*on\s*your)",
     r"(delivery|order|shipment).*(arriving|dispatched|shipped)",
+    # Hindi safe
+    r"(otp|code).*kisi\s*ko\s*(mat|nahi)\s*(bataye|batayen|share)",
 ]
 
 
@@ -136,13 +170,37 @@ def _keyword_scan(message: str) -> dict:
     }
 
 
+def _calibrate_score(model_prob: float, keyword_score: float, num_patterns: int) -> float:
+    """
+    Calibrate the combined score to produce realistic, well-distributed values.
+    Avoids clustering at fixed thresholds like 45, 75, 90.
+    """
+    # Base: weighted blend (model is less reliable for Indian scams)
+    base = (0.35 * model_prob) + (0.65 * keyword_score)
+
+    # Pattern count bonus (diminishing returns)
+    pattern_bonus = {0: 0.0, 1: 0.12, 2: 0.28, 3: 0.38, 4: 0.44, 5: 0.48}
+    bonus = pattern_bonus.get(num_patterns, 0.50)
+    base = max(base, bonus)
+
+    # Add small variance based on model confidence to avoid identical scores
+    # e.g., two "1 pattern" matches won't both score exactly 0.45
+    variance = model_prob * 0.15
+    calibrated = base + variance * (1 - base)  # Compress toward top
+
+    # Smooth into 0–1 range
+    calibrated = max(0.0, min(calibrated, 1.0))
+
+    # Final floor: if any pattern matched, minimum 0.40
+    if num_patterns >= 1:
+        calibrated = max(calibrated, 0.40)
+
+    return round(calibrated, 4)
+
+
 def run_layer1(message: str) -> dict:
     """
     Analyze a message using DistilBERT model + Indian keyword booster.
-
-    The final score combines:
-        - Model confidence (what the AI thinks)
-        - Keyword score (Indian-specific scam pattern matches)
 
     Args:
         message: The raw SMS/text message to analyze.
@@ -156,7 +214,11 @@ def run_layer1(message: str) -> dict:
             - matched_patterns: list of scam pattern groups matched
             - matched_keywords: list of actual keywords found
             - proceed_to_layer2: bool
+            - processing_time_ms: float
     """
+    start_time = time.time()
+
+    # --- Input validation ---
     if not message or not message.strip():
         return {
             "label": "ham",
@@ -166,7 +228,11 @@ def run_layer1(message: str) -> dict:
             "matched_patterns": [],
             "matched_keywords": [],
             "proceed_to_layer2": False,
+            "processing_time_ms": 0.0,
         }
+
+    # Strip and limit message length
+    message = message.strip()[:2000]
 
     # --- Model inference ---
     inputs = tokenizer(
@@ -186,45 +252,47 @@ def run_layer1(message: str) -> dict:
     kw = _keyword_scan(message)
 
     # --- Safe pattern override ---
-    # If safe patterns match, trust it as legitimate regardless of model
-    # (OTP messages, bill reminders, etc. are very specific patterns)
     if kw["is_safe_override"]:
+        elapsed = round((time.time() - start_time) * 1000, 2)
+        scan_counter["total"] += 1
+        scan_counter["ham"] += 1
         return {
             "label": "ham",
             "confidence": round(max(1 - spam_prob, 0.85), 4),
-            "risk_score": max(int(spam_prob * 15), 5),  # Low risk
+            "risk_score": max(int(spam_prob * 15), 5),
             "risk_level": "Safe",
             "matched_patterns": [],
             "matched_keywords": [],
             "proceed_to_layer2": False,
+            "processing_time_ms": elapsed,
         }
 
-    # --- Combined scoring ---
-    # Weighted combination: 40% model + 60% keywords (keywords are more
-    # reliable for Indian scams since model was trained on Western data)
-    combined_score = (0.4 * spam_prob) + (0.6 * kw["keyword_score"])
-
-    # Minimum score floors based on keyword matches
-    # Even a single strong pattern match should flag as at least suspicious
-    if len(kw["matched_patterns"]) >= 1:
-        combined_score = max(combined_score, 0.45)  # At least Suspicious
-    if len(kw["matched_patterns"]) >= 2:
-        combined_score = max(combined_score, 0.75)  # High Risk
-    if len(kw["matched_patterns"]) >= 3:
-        combined_score = max(combined_score, 0.90)  # Very High Risk
+    # --- Calibrated scoring ---
+    combined_score = _calibrate_score(spam_prob, kw["keyword_score"], len(kw["matched_patterns"]))
 
     # Final decision
     risk_score = int(combined_score * 100)
 
     if combined_score >= 0.60:
         label = "spam"
-        risk_level = "High Risk" if combined_score >= 0.75 else "Suspicious"
+        risk_level = "High Risk" if combined_score >= 0.72 else "Suspicious"
     elif combined_score >= 0.35:
         label = "spam"
         risk_level = "Suspicious"
     else:
         label = "ham"
         risk_level = "Safe"
+
+    elapsed = round((time.time() - start_time) * 1000, 2)
+
+    # --- Update pattern memory ---
+    scan_counter["total"] += 1
+    if label == "spam":
+        scan_counter["spam"] += 1
+        for p in kw["matched_patterns"]:
+            pattern_memory[p] += 1
+    else:
+        scan_counter["ham"] += 1
 
     return {
         "label": label,
@@ -234,4 +302,13 @@ def run_layer1(message: str) -> dict:
         "matched_patterns": kw["matched_patterns"],
         "matched_keywords": kw["matched_keywords"],
         "proceed_to_layer2": label == "spam" or risk_level == "Suspicious",
+        "processing_time_ms": elapsed,
+    }
+
+
+def get_pattern_stats() -> dict:
+    """Return scam pattern frequency stats for the /stats endpoint."""
+    return {
+        "scan_counter": dict(scan_counter),
+        "top_patterns": pattern_memory.most_common(10),
     }

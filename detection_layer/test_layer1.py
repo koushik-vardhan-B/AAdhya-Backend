@@ -1,11 +1,11 @@
 """
-Test script for Layer 1 — Spam Detection with Keyword Booster
+Test script for Layer 1 — Spam Detection with all improvements
 Run from detection_layer/: python test_layer1.py
 """
 
-from layer1 import run_layer1
+from layer1 import run_layer1, get_pattern_stats
 
-# Mix of real Indian scam patterns + legitimate messages
+# Mix of real Indian scam patterns + legitimate messages + Hinglish
 test_messages = [
     # --- Scam / Spam messages (should be flagged) ---
     "Congratulations! You won ₹25 lakh KBC lottery. Send Aadhaar now.",
@@ -14,6 +14,10 @@ test_messages = [
     "Dear customer, your SBI account will be suspended. Click here to update KYC: http://sbi-update.in",
     "You have received ₹15,000 cashback from PhonePe. Claim now: bit.ly/fakelink",
     "URGENT: Your PAN card is linked to illegal activity. Call 9876543210 immediately.",
+
+    # --- Hinglish scam messages ---
+    "Badhai ho! Aapne KBC mein 25 lakh jeete. Paisa lene ke liye yahan click karein.",
+    "Ghar baithe kamao 50,000 rupaye. Abhi registration fee bhejein.",
 
     # --- Legitimate / Safe messages (should NOT be flagged) ---
     "Hi, are you coming to the meeting tomorrow at 3pm?",
@@ -24,6 +28,7 @@ test_messages = [
 
 expected = [
     "SPAM", "SPAM", "SPAM", "SPAM", "SPAM", "SPAM",
+    "SPAM", "SPAM",
     "HAM", "HAM", "HAM", "HAM",
 ]
 
@@ -50,13 +55,17 @@ for i, msg in enumerate(test_messages):
     print(f"   Label      : {actual}  ({check}, expected {expected[i]})")
     print(f"   Risk Score : {result['risk_score']}/100")
     print(f"   Risk Level : {result['risk_level']}")
+    print(f"   ⏱️ Time     : {result['processing_time_ms']}ms")
     if result["matched_patterns"]:
         print(f"   Patterns   : {', '.join(result['matched_patterns'])}")
     if result["matched_keywords"]:
         print(f"   Keywords   : {result['matched_keywords']}")
     print(f"   → Layer 2  : {'Yes' if result['proceed_to_layer2'] else 'No'}")
 
-print("\n" + "=" * 65)
+# Pattern stats
+p_stats = get_pattern_stats()
+
+print(f"\n{'=' * 65}")
 print("  SUMMARY")
 print("=" * 65)
 print(f"  Total messages : {len(test_messages)}")
@@ -64,4 +73,7 @@ print(f"  ✅ Safe         : {stats['Safe']}")
 print(f"  ⚠️  Suspicious  : {stats['Suspicious']}")
 print(f"  🚨 High Risk    : {stats['High Risk']}")
 print(f"  📊 Accuracy     : {correct}/{len(test_messages)} ({correct/len(test_messages)*100:.0f}%)")
+print(f"\n  🧠 Pattern Memory:")
+for pattern, count in p_stats["top_patterns"]:
+    print(f"     {pattern}: {count} hits")
 print("=" * 65)
