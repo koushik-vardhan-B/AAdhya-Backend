@@ -13,7 +13,7 @@ from database import (
 # Add detection_layer to Python path so we can import layer1, layer2
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "detection_layer"))
 from layer1 import run_layer1, get_pattern_stats
-from layer2 import run_layer2
+from layer2 import run_layer2, _detect_language, EXPLANATIONS, PREVENTION_TIPS_I18N
 from ocr import extract_text_from_bytes
 
 # Setup logger for response time tracking
@@ -112,7 +112,7 @@ def predict(payload: PredictRequest):
                 "risk_level": l1["risk_level"],
                 "fraud_type": None,
                 "suspicious_keywords": l1.get("matched_keywords", []),
-                "explanation": "This message appears to be safe. No fraud indicators detected.",
+                "explanation": EXPLANATIONS.get(_detect_language(payload.message), EXPLANATIONS["en"])["safe"],
                 "prevention_tips": [],
                 "helpline": None,
                 "url_analysis": None,
@@ -131,9 +131,10 @@ def predict(payload: PredictRequest):
                 "fraud_type": fraud_type,
                 "suspicious_keywords": l2["matched_keywords"],
                 "explanation": l2["explanation"],
-                "prevention_tips": PREVENTION_TIPS.get(fraud_type, PREVENTION_TIPS["Others"]),
+                "prevention_tips": l2.get("prevention_tips", []),
                 "helpline": "📞 National Cyber Crime Helpline: 1930 | cybercrime.gov.in",
                 "url_analysis": l2.get("url_analysis"),
+                "detected_language": l2.get("detected_language", "en"),
             }
 
         # Timing info
@@ -225,13 +226,14 @@ async def predict_image(file: UploadFile = File(...)):
             "risk_level": l1["risk_level"],
             "fraud_type": None,
             "suspicious_keywords": l1.get("matched_keywords", []),
-            "explanation": "This message appears to be safe. No fraud indicators detected.",
+            "explanation": EXPLANATIONS.get(ocr_result.get("language_detected", "en"), EXPLANATIONS["en"])["safe"],
             "prevention_tips": [],
             "helpline": None,
             "url_analysis": None,
         }
     else:
-        l2 = run_layer2(extracted_text, layer1_result=l1)
+        ocr_lang = ocr_result.get("language_detected", None)
+        l2 = run_layer2(extracted_text, layer1_result=l1, language=ocr_lang)
         fraud_type = l2["fraud_type"]
         total_ms = round((time.time() - pipeline_start) * 1000, 2)
         logger.info(f"📸 🚨 {l2['risk_level'].upper()} | {fraud_type} | {total_ms}ms | OCR: \"{extracted_text[:50]}...\"")
@@ -243,9 +245,10 @@ async def predict_image(file: UploadFile = File(...)):
             "fraud_type": fraud_type,
             "suspicious_keywords": l2["matched_keywords"],
             "explanation": l2["explanation"],
-            "prevention_tips": PREVENTION_TIPS.get(fraud_type, PREVENTION_TIPS["Others"]),
+            "prevention_tips": l2.get("prevention_tips", []),
             "helpline": "📞 National Cyber Crime Helpline: 1930 | cybercrime.gov.in",
             "url_analysis": l2.get("url_analysis"),
+            "detected_language": l2.get("detected_language", "en"),
         }
 
     # Auto-save to Supabase
