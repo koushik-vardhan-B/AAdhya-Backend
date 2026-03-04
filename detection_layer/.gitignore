@@ -1,0 +1,10 @@
+# Model files (too large for GitHub — download via scripts)
+models/distilbert_spam/
+models/bert_phishing/
+
+# Python
+__pycache__/
+*.py[cod]
+
+
+venv

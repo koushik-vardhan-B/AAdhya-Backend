@@ -1,0 +1,29 @@
+# Virtual environment
+venv/
+.venv/
+
+# Model files (too large for GitHub — download via scripts)
+detection_layer/models/distilbert_spam/
+detection_layer/models/bert_phishing/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+Thumbs.db
+.DS_Store

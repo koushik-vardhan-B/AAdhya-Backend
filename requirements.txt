@@ -1,0 +1,15 @@
+transformers 
+torch
+optimum[onnxruntime]
+datasets
+scikit-learn
+fastapi 
+uvicorn 
+pydantic
+
+
+groq==0.9.0
+supabase==2.5.0
+pinecone-client==3.2.2
+python-dotenv==1.0.1
+
