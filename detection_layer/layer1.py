@@ -54,6 +54,15 @@ SCAM_PATTERNS = {
             r"(paisa|paise|rupay)\s*(bhej|transfer|de)",
             r"(khata|account)\s*(band|block|verify)",
             r"apn[ae]\s*(bank|upi|account)\s*(verify|update)",
+            # Hindi (Devanagari)
+            r"(बैंक|खाता|अकाउंट).*(बंद|ब्लॉक|सस्पेंड|फ्रीज़|वेरिफ़ाई|अपडेट)",
+            r"(kyc|केवाईसी).*(अपडेट|वेरिफ़ाई|एक्सपायर|पेंडिंग)",
+            r"(otp|ओटीपी|पिन|cvv).*(शेयर|भेजे|बताए|दें)",
+            r"(पैसा|पैसे|रुपये).*(भेज|ट्रांसफर|वापस)",
+            # Telugu
+            r"(బ్యాంకు|ఖాతా|అకౌంట్).*(బ్లాక్|సస్పెండ్|వెరిఫై|అప్‌డేట్)",
+            r"(kyc|కేవైసీ).*(అప్‌డేట్|వెరిఫై|ఎక్స్‌పైర్)",
+            r"(otp|ఓటీపీ|పిన్).*(చెప్పకండి|షేర్|పంపండి)",
         ],
     },
     # Lottery / Prize scam
@@ -68,6 +77,16 @@ SCAM_PATTERNS = {
             r"(jeet|jeeta|jeete|jeetiye).*(lakh|crore|inam|prize)",
             r"(inam|inaam)\s*(milega|mila|le)",
             r"badhai\s*ho",
+            # Hindi (Devanagari)
+            r"(जीत|जीता|जीते).*(इनाम|लाख|करोड़|प्राइज)",
+            r"(बधाई|मुबारक).*(जीत|इनाम|प्राइज)",
+            r"(इनाम|पुरस्कार|बहुमतি).*(प्राप्त|पाएं|मिल|क्लेम)",
+            r"(लॉटरी|लकी\s*ड्रॉ|मेगा\s*ड्रॉ)",
+            r"(iPhone|आईफोन|सैमसंग|गैलेक्सी).*(जीत|गेलुचु|గెలుచు|won|win)",
+            # Telugu
+            r"(అభినందనలు|బహుమతి|ఇనాం).*(గెలుచు|గెలిచారు|పొందండి)",
+            r"(లాటరీ|లక్కీ\s*డ్రా)",
+            r"(iPhone|ఐఫోన్).*(గెలుచు|గెలిచారు)",
         ],
     },
     # Job scam
@@ -83,6 +102,40 @@ SCAM_PATTERNS = {
             r"(ghar\s*baithe|ghar\s*se)\s*(kama|kamai|paise)",
             r"(naukri|job)\s*(chahiye|dilayenge|milegi)",
             r"(kamai|kamao|kamaye)\s*(₹|rs|lakh|hazar)",
+            # Hindi (Devanagari)
+            r"(घर\s*बैठे|घर\s*से)\s*(कमा|कमाई|पैसे)",
+            r"(नौकरी|जॉब).*(दिलाएंगे|मिलेगी|चाहिए)",
+            r"(रजिस्ट्रेशन|ज्वाइनिंग)\s*(फीस|शुल्क)",
+            # Telugu
+            r"(ఇంట్లో|ఇంటి\s*నుండి)\s*(సంపాదించ|డబ్బు)",
+            r"(ఉద్యోగం|జాబ్).*(రిజిస్ట్రేషన్|ఫీజు)",
+        ],
+    },
+    # Investment / Trading scam
+    "investment_scam": {
+        "weight": 0.35,
+        "keywords": [
+            r"(earn|make|get)\s*(₹|rs\.?|र)?\s*\d[\d,\.]*\s*(daily|per\s*day|per\s*month|monthly)",
+            r"(mcx|nse|bse|forex|crypto|bitcoin|share\s*market|stock\s*market|commodity)",
+            r"(trading|trade)\s*.*(profit|signal|tip|call)",
+            r"(signal|tip)s?\s*.*(trading|market|stock|gold|silver|crude)",
+            r"(leverage|margin)\s*\d+\s*x",
+            r"\d+\s*x\s*(leverage|return|margin)",
+            r"(lowest|zero|0|no)\s*(brokerage|tax|fee|commission)",
+            r"(guaranteed|assured|fixed)\s*(return|income|profit|earning)",
+            r"(gold|silver|crude|nifty|sensex).*(gain|profit|moving|rally|bull)",
+            r"(invest|deposit)\s*(₹|rs\.?)\s*\d+.*(return|profit|income|double)",
+            r"(mutual\s*fund|sip|demat|portfolio).*(fraud|fake|scam|guaranteed)",
+            # Hinglish
+            r"(paisa|paise)\s*(double|triple|kamao)",
+            r"(share|stock)\s*(market|bazaar)\s*(tip|signal|call)",
+            # Hindi (Devanagari)
+            r"(शेयर|स्टॉक|मार्केट|बाजार).*(टिप|सिग्नल|कॉल|मुनाफा)",
+            r"(निवेश|इन्वेस्ट).*(रिटर्न|मुनाफा|डबल|गारंटी)",
+            r"(ट्रेडिंग|ट्रेड).*(प्रॉफिट|सिग्नल|टिप)",
+            # Telugu
+            r"(షేర్|స్టాక్|మార్కెట్).*(టిప్|సిగ్నల్|లాభం)",
+            r"(పెట్టుబడి|ఇన్వెస్ట్).*(రిటర్న్|లాభం|డబుల్)",
         ],
     },
     # Phishing / Link scam
@@ -91,12 +144,23 @@ SCAM_PATTERNS = {
         "keywords": [
             r"(click|tap)\s*(here|now|link|below)",
             r"(verify|update|confirm)\s*(now|your|account|kyc|pan|aadhaar)",
-            r"http[s]?://\S+",  # any URL in SMS is suspicious
+            r"https?://\S+",  # any URL in SMS is suspicious
             r"bit\.ly|tinyurl|short\.link",
             r"(pan|aadhaar|aadhar)\s*(card|number|link|illegal)",
+            # Bare domains with suspicious TLDs
+            r"(?:[a-zA-Z0-9\-]+\.)+(?:xyz|top|buzz|club|info|tk|ml|ga|cf|gq|work|click|link|online|site|icu|pw|win|bid|stream|racing)",
             # Hinglish
             r"(yahan|idhar|neeche)\s*(click|tap|dabaye)",
             r"(link|url)\s*(khole|kholo|open\s*karo)",
+            # Hindi (Devanagari)
+            r"(क्लिक|टैप|दबाएं).*(यहां|नीचे|लिंक|अभी)",
+            r"(लिंक|यूआरएल).*(खोलें|ओपन|क्लिक)",
+            r"(वेरिफ़ाई|अपडेट|कन्फर्म)\s*(करें|करो|कीजिए)",
+            r"(तुरंत|अभी|जल्दी)\s*(अपडेट|वेरिफ़ाई|क्लिक)",
+            # Telugu
+            r"(క్లిక్|ట్యాప్)\s*(చేయండి|చేసి|ఇక్కడ)",
+            r"(లింక్|యూఆర్ఎల్).*(ఓపెన్|క్లిక్)",
+            r"(వెరిఫై|అప్‌డేట్)\s*(చేయండి|చేసి)",
         ],
     },
     # Urgency / Pressure tactics
@@ -112,6 +176,15 @@ SCAM_PATTERNS = {
             # Hinglish
             r"(jaldi|turant|abhi)\s*(karo|kare|karein)",
             r"(aakhri|antim)\s*(mauka|chance|chetavni)",
+            # Hindi (Devanagari)
+            r"(तुरंत|जल्दी|अभी|फौरन)",
+            r"(आखिरी|अंतिम)\s*(मौका|चेतावनी|चांस)",
+            r"\d+\s*(घंटे|मिनट|दिन)\s*(में|के\s*अंदर)",
+            r"(सिर्फ|केवल)\s*(आज|अभी)",
+            # Telugu
+            r"(వెంటనే|ఇప్పుడే|త్వరగా)",
+            r"(ఈరోజే|ఈ\s*రోజే)",
+            r"(చివరి|ఆఖరి)\s*(అవకాశం|ఛాన్స్)",
         ],
     },
 }
@@ -126,6 +199,9 @@ SAFE_PATTERNS = [
     r"(delivery|order|shipment).*(arriving|dispatched|shipped)",
     # Hindi safe
     r"(otp|code).*kisi\s*ko\s*(mat|nahi)\s*(bataye|batayen|share)",
+    r"(ओटीपी|otp).*(किसी|कभी).*(शेयर|बताए).*नहीं",
+    # Telugu safe
+    r"(otp|ఓటీపీ).*(ఎవరికీ|ఎప్పుడూ).*(చెప్పకండి|షేర్)",
 ]
 
 

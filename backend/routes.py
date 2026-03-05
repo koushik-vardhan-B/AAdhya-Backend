@@ -13,7 +13,7 @@ from database import (
 # Add detection_layer to Python path so we can import layer1, layer2
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "detection_layer"))
 from layer1 import run_layer1, get_pattern_stats
-from layer2 import run_layer2, _detect_language, EXPLANATIONS, PREVENTION_TIPS_I18N
+from layer2 import run_layer2, _detect_language, EXPLANATIONS
 from ocr import extract_text_from_bytes
 from translation import translate_response, SUPPORTED_LANGUAGES
 
@@ -71,6 +71,13 @@ PREVENTION_TIPS = {
         "Never pay money to get a job offer.",
         "Report fake job offers to the Cyber Crime helpline 1930.",
     ],
+    "Investment Scam": [
+        "No one can guarantee fixed returns from stock/commodity trading.",
+        "Always verify SEBI registration of any investment advisor.",
+        "Never send money to unknown trading platforms or 'experts'.",
+        "Be wary of promises like '500X leverage' or 'daily profits'.",
+        "Report investment fraud to SEBI (scores.gov.in) and helpline 1930.",
+    ],
     "Phishing": [
         "Never click on unknown or suspicious links.",
         "Always verify URLs before entering credentials.",
@@ -120,7 +127,7 @@ def predict(payload: PredictRequest):
             }
         else:
             # Layer 2 — What kind of fraud?
-            l2 = run_layer2(payload.message, layer1_result=l1)
+            l2 = run_layer2(payload.message, layer1_result=l1, language=payload.language)
             fraud_type = l2["fraud_type"]
             total_ms = round((time.time() - pipeline_start) * 1000, 2)
             logger.info(f"🚨 {l2['risk_level'].upper()} | {fraud_type} | {l2['risk_score']}/100 | {total_ms}ms | \"{payload.message[:50]}...\"")
@@ -240,8 +247,8 @@ async def predict_image(file: UploadFile = File(...), language: str = "en"):
             "url_analysis": None,
         }
     else:
-        ocr_lang = ocr_result.get("language_detected", None)
-        l2 = run_layer2(extracted_text, layer1_result=l1, language=ocr_lang)
+        # Don't pass OCR engine language — let run_layer2 detect from actual text content
+        l2 = run_layer2(extracted_text, layer1_result=l1)
         fraud_type = l2["fraud_type"]
         total_ms = round((time.time() - pipeline_start) * 1000, 2)
         logger.info(f"📸 🚨 {l2['risk_level'].upper()} | {fraud_type} | {total_ms}ms | OCR: \"{extracted_text[:50]}...\"")
