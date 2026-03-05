@@ -15,7 +15,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "detection_laye
 from layer1 import run_layer1, get_pattern_stats
 from layer2 import run_layer2, _detect_language, EXPLANATIONS
 from ocr import extract_text_from_bytes
-from translation import translate_response, SUPPORTED_LANGUAGES
 
 # Setup logger for response time tracking
 logger = logging.getLogger("aadhya")
@@ -34,7 +33,7 @@ class ScanResult(BaseModel):
 
 class PredictRequest(BaseModel):
     message: str
-    language: str = "en"  # Response language: en, te, hi, ta, kn, bn, mr
+    language: str = "en"
 
     @field_validator("message")
     @classmethod
@@ -170,9 +169,6 @@ def predict(payload: PredictRequest):
         except Exception:
             pass  # Don't fail prediction if DB save fails
 
-        # Translate if non-English language requested
-        if payload.language != "en" and payload.language in SUPPORTED_LANGUAGES:
-            result = translate_response(result, payload.language)
 
         return {"message": payload.message, **result}
 
@@ -184,14 +180,11 @@ def predict(payload: PredictRequest):
 # 📸 PREDICT IMAGE — Screenshot-based fraud detection
 # ---------------------------------------------------------------------------
 @router.post("/predict-image")
-async def predict_image(file: UploadFile = File(...), language: str = "en"):
+async def predict_image(file: UploadFile = File(...)):
     """
     Upload a screenshot of a suspicious message.
     OCR extracts the text, then runs Layer 1 + Layer 2 detection.
     Perfect for rural users who can't copy-paste.
-    
-    Query params:
-        language: Response language (en, te, hi, ta, kn, bn, mr)
     """
     pipeline_start = time.time()
 
@@ -279,9 +272,6 @@ async def predict_image(file: UploadFile = File(...), language: str = "en"):
 
     total_ms = round((time.time() - pipeline_start) * 1000, 2)
 
-    # Translate if non-English language requested
-    if language != "en" and language in SUPPORTED_LANGUAGES:
-        result = translate_response(result, language)
 
     return {
         "message": extracted_text,
@@ -381,61 +371,3 @@ def community_feed(limit: int = 20, fraud_type: str = None):
 @router.get("/keywords")
 def top_keywords(limit: int = 10):
     return get_top_keywords(limit)
-
-
-# ---------------------------------------------------------------------------
-# 🌐 TRANSLATE — Translate text to regional languages
-# ---------------------------------------------------------------------------
-class TranslateRequest(BaseModel):
-    text: str
-    target_language: str  # te, hi, ta, kn, bn, mr
-
-    @field_validator("text")
-    @classmethod
-    def text_must_not_be_empty(cls, v):
-        if not v or not v.strip():
-            raise ValueError("Text cannot be empty")
-        return v.strip()
-
-    @field_validator("target_language")
-    @classmethod
-    def language_must_be_supported(cls, v):
-        if v not in SUPPORTED_LANGUAGES:
-            raise ValueError(f"Unsupported language. Use: {', '.join(SUPPORTED_LANGUAGES.keys())}")
-        return v
-
-
-@router.post("/translate")
-def translate_endpoint(payload: TranslateRequest):
-    """
-    Translate text to Telugu, Hindi, or other regional languages.
-    
-    Supported languages:
-        - te: Telugu
-        - hi: Hindi
-        - ta: Tamil
-        - kn: Kannada
-        - bn: Bengali
-        - mr: Marathi
-    """
-    from translation import translate_text
-    
-    translated = translate_text(payload.text, payload.target_language)
-    
-    return {
-        "original": payload.text,
-        "translated": translated,
-        "language": SUPPORTED_LANGUAGES[payload.target_language],
-        "language_code": payload.target_language,
-    }
-
-
-@router.get("/languages")
-def supported_languages():
-    """Get list of supported languages for translation."""
-    return {
-        "languages": [
-            {"code": code, "name": name}
-            for code, name in SUPPORTED_LANGUAGES.items()
-        ]
-    }
