@@ -1,17 +1,20 @@
-transformers 
+# PyTorch CPU-only (saves ~1.5GB vs full torch)
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch
+
+transformers
 optimum[onnxruntime]
 datasets
 scikit-learn
-fastapi 
-uvicorn 
+
+fastapi
+uvicorn[standard]
 pydantic
-easyocr
 python-multipart
 
+easyocr
 
 groq==0.9.0
 supabase==2.5.0
 pinecone-client==3.2.2
 python-dotenv==1.0.1
-
